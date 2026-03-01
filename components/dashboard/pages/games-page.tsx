@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button"
 import { TicTacToe } from "@/components/games/tic-tac-toe"
 import { Sudoku } from "@/components/games/sudoku"
 import { MemoryFlip } from "@/components/games/memory-flip"
+import { ChessGame } from "@/components/games/chess-game"
 
 export function GamesPage() {
   const [selectedGame, setSelectedGame] = useState<string | null>(null)
@@ -14,6 +15,7 @@ export function GamesPage() {
     { id: "tic-tac-toe", name: "Tic Tac Toe", icon: "⭕", desc: "Classic strategy game" },
     { id: "sudoku", name: "Sudoku", icon: "🔢", desc: "Logic puzzle game" },
     { id: "memory", name: "Memory Flip", icon: "🧠", desc: "Test your memory" },
+    { id: "chess", name: "Chess", icon: "♞", desc: "Classic strategy with AI" },
   ]
 
   const renderGame = () => {
@@ -24,6 +26,8 @@ export function GamesPage() {
         return <Sudoku onClose={() => setSelectedGame(null)} />
       case "memory":
         return <MemoryFlip onClose={() => setSelectedGame(null)} />
+      case "chess":
+        return <ChessGame onClose={() => setSelectedGame(null)} />
       default:
         return null
     }

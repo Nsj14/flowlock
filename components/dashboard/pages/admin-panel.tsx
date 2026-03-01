@@ -65,6 +65,7 @@ const mockGames = [
   { id: 1, name: "Tic Tac Toe", icon: "⭕", desc: "Classic strategy game", enabled: true },
   { id: 2, name: "Sudoku", icon: "🔢", desc: "Logic puzzle game", enabled: true },
   { id: 3, name: "Memory Flip", icon: "🧠", desc: "Test your memory", enabled: true },
+  { id: 4, name: "Chess", icon: "♞", desc: "Classic strategy with AI", enabled: true },
 ]
 
 export function AdminPanel() {
@@ -151,9 +152,8 @@ export function AdminPanel() {
                   <div className="flex gap-1">
                     <button
                       onClick={() => toggleGameStatus(game.id)}
-                      className={`px-2 py-1 rounded text-xs font-semibold transition-colors ${
-                        game.enabled ? "bg-primary/20 text-primary" : "bg-destructive/20 text-destructive"
-                      }`}
+                      className={`px-2 py-1 rounded text-xs font-semibold transition-colors ${game.enabled ? "bg-primary/20 text-primary" : "bg-destructive/20 text-destructive"
+                        }`}
                     >
                       {game.enabled ? "Enabled" : "Disabled"}
                     </button>

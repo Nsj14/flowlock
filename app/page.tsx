@@ -4,9 +4,7 @@ import { LoginPage } from "@/components/auth/login-page"
 import { useAuth } from "@/components/providers/auth-provider"
 import { useRouter } from "next/navigation"
 import { useEffect } from "react"
-import type { UserRole } from "./page"
-
-export type { UserRole }
+export type UserRole = "student" | "teacher" | "admin"
 
 export interface AuthUser {
   id: string

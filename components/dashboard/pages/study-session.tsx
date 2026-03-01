@@ -35,8 +35,78 @@ interface StudySessionProps {
   onSessionComplete?: (result: FocusSessionResult) => void
 }
 
+function WheelPicker({
+  value,
+  onChange,
+  max,
+  label
+}: {
+  value: number
+  onChange: (val: number) => void
+  max: number
+  label: string
+}) {
+  const containerRef = useRef<HTMLDivElement>(null)
+
+  // Generate options (add empty items at start and end for padding)
+  const options = Array.from({ length: max + 1 }, (_, i) => i)
+
+  // Handle scroll snap
+  const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    const container = e.currentTarget
+    const itemHeight = 64 // matches h-16
+    const index = Math.round(container.scrollTop / itemHeight)
+
+    if (index >= 0 && index <= max && index !== value) {
+      onChange(index)
+    }
+  }
+
+  // Scroll to selected value on mount
+  useEffect(() => {
+    if (containerRef.current) {
+      containerRef.current.scrollTop = value * 64
+    }
+  }, [value])
+
+  return (
+    <div className="flex flex-col items-center mx-2">
+      <div
+        ref={containerRef}
+        onScroll={handleScroll}
+        className="h-[192px] w-24 overflow-y-auto snap-y snap-mandatory no-scrollbar relative"
+        style={{ scrollBehavior: 'smooth' }}
+      >
+        {/* Top padding */}
+        <div className="h-[64px] snap-center" />
+
+        {options.map((num) => (
+          <div
+            key={num}
+            onClick={() => {
+              if (containerRef.current) {
+                containerRef.current.scrollTo({ top: num * 64, behavior: 'smooth' })
+              }
+            }}
+            className={`h-[64px] flex items-center justify-center snap-center cursor-pointer transition-colors duration-200 ${value === num ? 'font-bold text-5xl text-primary' : 'text-3xl text-muted-foreground/40 hover:text-muted-foreground/80'
+              }`}
+          >
+            {num.toString().padStart(2, '0')}
+          </div>
+        ))}
+
+        {/* Bottom padding */}
+        <div className="h-[64px] snap-center" />
+      </div>
+      <span className="text-sm font-semibold text-muted-foreground mt-2 uppercase tracking-widest">{label}</span>
+    </div>
+  )
+}
+
 export function StudySession({ user, onSessionComplete }: StudySessionProps) {
   // Timer state
+  const [selectedHours, setSelectedHours] = useState(0)
+  const [selectedMinutes, setSelectedMinutes] = useState(25)
   const [timeLeft, setTimeLeft] = useState(25 * 60)
   const [initialTime, setInitialTime] = useState(25 * 60)
   const [sessionMode, setSessionMode] = useState<"focus" | "break">("focus")
@@ -331,7 +401,15 @@ export function StudySession({ user, onSessionComplete }: StudySessionProps) {
   // ── Session controls ──
 
   const handleStart = useCallback(async () => {
+    // Validate we're not starting a timer for 0
+    if (selectedHours === 0 && selectedMinutes === 0) return
+
     try {
+      // Calculate selected time and set it immediately before starting
+      const totalSeconds = (selectedHours * 3600) + (selectedMinutes * 60)
+      setTimeLeft(totalSeconds)
+      setInitialTime(totalSeconds)
+
       // Reset detection state
       timersRef.current = { drowsy: 0, faceMissing: 0, headTurned: 0 }
       statsRef.current = { drowsyCount: 0, faceMissingCount: 0, headTurnedCount: 0 }
@@ -380,7 +458,7 @@ export function StudySession({ user, onSessionComplete }: StudySessionProps) {
       console.error(error)
       updateStatusUI("Error: " + error.message, "warning")
     }
-  }, [setupCamera, detectLoop, updateStatusUI])
+  }, [setupCamera, detectLoop, updateStatusUI, selectedHours, selectedMinutes])
 
   const handlePause = useCallback(() => {
     // Pause detection loop
@@ -423,19 +501,24 @@ export function StudySession({ user, onSessionComplete }: StudySessionProps) {
     stopCamera()
 
     setPhase("idle")
-    setTimeLeft(initialTime)
+    setTimeLeft((selectedHours * 3600) + (selectedMinutes * 60)) // Reset to currently scrolled time
     setSessionMode("focus")
     updateStatusUI("System Ready", "neutral")
     setResult(null)
-  }, [stopCamera, initialTime, updateStatusUI])
+  }, [stopCamera, selectedHours, selectedMinutes, updateStatusUI])
 
   const handleQuickStart = useCallback(
     (minutes: number) => {
+      const hrs = Math.floor(minutes / 60)
+      const mins = minutes % 60
+      setSelectedHours(hrs)
+      setSelectedMinutes(mins)
       setTimeLeft(minutes * 60)
       setInitialTime(minutes * 60)
       setSessionMode("focus")
       // Delay start slightly so state updates propagate
-      setTimeout(() => handleStart(), 50)
+      setTimeout(() => setPhase("active"), 50)
+      setTimeout(() => handleStart(), 150)
     },
     [handleStart]
   )
@@ -576,9 +659,26 @@ export function StudySession({ user, onSessionComplete }: StudySessionProps) {
                     <span className="text-sm font-semibold">Focus Mode</span>
                   </div>
 
-                  {/* Timer display */}
-                  <div className="text-7xl md:text-8xl font-bold font-mono text-primary tabular-nums">
-                    {formatTimerDisplay(timeLeft)}
+                  {/* Timer display (Picker) */}
+                  <div className="relative">
+                    {/* Selection highlight bar behind numbers */}
+                    <div className="absolute top-[64px] left-0 right-0 h-[64px] bg-primary/5 rounded-2xl pointer-events-none border-y border-primary/10" />
+
+                    <div className="flex items-center justify-center font-mono">
+                      <WheelPicker
+                        value={selectedHours}
+                        onChange={setSelectedHours}
+                        max={12}
+                        label="Hr"
+                      />
+                      <span className="text-4xl text-primary font-bold -mt-8 animate-pulse">:</span>
+                      <WheelPicker
+                        value={selectedMinutes}
+                        onChange={setSelectedMinutes}
+                        max={59}
+                        label="Min"
+                      />
+                    </div>
                   </div>
 
                   {/* Controls */}
@@ -586,7 +686,8 @@ export function StudySession({ user, onSessionComplete }: StudySessionProps) {
                     <Button
                       size="lg"
                       onClick={handleStart}
-                      className="gap-2"
+                      disabled={selectedHours === 0 && selectedMinutes === 0}
+                      className="gap-2 transition-all"
                     >
                       <Play size={20} />
                       Start

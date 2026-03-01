@@ -71,7 +71,7 @@ export function DashboardHome({ user, lastFocusSession }: DashboardHomeProps) {
       <div className="flex flex-col gap-1">
         <h1 className="text-3xl font-bold tracking-tight text-foreground">Welcome back, {user.name}</h1>
         <p className="text-muted-foreground">
-          Here's your study performance overview for {user.grade || "today"}.
+          Here's your study performance overview.
         </p>
       </div>
 

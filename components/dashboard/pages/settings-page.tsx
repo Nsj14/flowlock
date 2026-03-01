@@ -6,10 +6,17 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Bell, Lock, User, Palette, Shield } from "lucide-react"
+import { useAuth } from "@/components/providers/auth-provider"
 
 export function SettingsPage() {
   const { theme, setTheme } = useTheme()
+  const { user, updateProfile } = useAuth()
   const [mounted, setMounted] = useState(false)
+  const [fullName, setFullName] = useState(user?.name || "")
+  const [email, setEmail] = useState(user?.email || "")
+  const [role, setRole] = useState("Student")
+  const [isSaving, setIsSaving] = useState(false)
+
   const [notifications, setNotifications] = useState({
     sessionReminder: true,
     breakAlert: true,
@@ -18,7 +25,17 @@ export function SettingsPage() {
 
   useEffect(() => {
     setMounted(true)
-  }, [])
+    if (user) {
+      setFullName(user.name)
+      setEmail(user.email)
+    }
+  }, [user])
+
+  const handleSaveProfile = () => {
+    setIsSaving(true)
+    updateProfile({ name: fullName, email })
+    setTimeout(() => setIsSaving(false), 500) // visual feedback
+  }
 
   const isDark = mounted ? theme === "dark" : true
 
@@ -39,26 +56,43 @@ export function SettingsPage() {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <label className="text-sm font-medium">Full Name</label>
-              <Input placeholder="John Doe" className="mt-1" />
+              <Input
+                value={fullName}
+                onChange={(e) => setFullName(e.target.value)}
+                placeholder="John Doe"
+                className="mt-1"
+              />
             </div>
             <div>
               <label className="text-sm font-medium">Email</label>
-              <Input placeholder="john@example.com" type="email" className="mt-1" />
-            </div>
-            <div>
-              <label className="text-sm font-medium">Grade/Class</label>
-              <Input placeholder="10-A" className="mt-1" />
+              <Input
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="john@example.com"
+                type="email"
+                className="mt-1"
+              />
             </div>
             <div>
               <label className="text-sm font-medium">Role</label>
-              <select className="w-full px-3 py-2 rounded-lg bg-input border border-border text-foreground mt-1">
+              <select
+                value={role}
+                onChange={(e) => setRole(e.target.value)}
+                className="w-full px-3 py-2 rounded-lg bg-input border border-border text-foreground mt-1"
+              >
                 <option>Student</option>
                 <option>Teacher</option>
                 <option>Admin</option>
               </select>
             </div>
           </div>
-          <Button className="bg-primary hover:bg-primary/90">Save Changes</Button>
+          <Button
+            onClick={handleSaveProfile}
+            disabled={isSaving}
+            className="bg-primary hover:bg-primary/90"
+          >
+            {isSaving ? "Saving..." : "Save Changes"}
+          </Button>
         </CardContent>
       </Card>
 
@@ -161,6 +195,6 @@ export function SettingsPage() {
           </div>
         </CardContent>
       </Card>
-    </div>
+    </div >
   )
 }

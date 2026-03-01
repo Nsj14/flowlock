@@ -9,6 +9,7 @@ interface AuthContextType {
     isAuthenticated: boolean
     login: (user: AuthUser) => void
     logout: () => void
+    updateProfile: (userData: Partial<AuthUser>) => void
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
@@ -49,8 +50,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         router.push("/")
     }
 
+    const updateProfile = (userData: Partial<AuthUser>) => {
+        if (!user) return
+        const updatedUser = { ...user, ...userData }
+        setUser(updatedUser)
+        localStorage.setItem("flowlock_user", JSON.stringify(updatedUser))
+    }
+
     return (
-        <AuthContext.Provider value={{ user, isAuthenticated, login, logout }}>
+        <AuthContext.Provider value={{ user, isAuthenticated, login, logout, updateProfile }}>
             {!isLoading && children}
         </AuthContext.Provider>
     )

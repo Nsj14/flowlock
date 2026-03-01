@@ -61,11 +61,11 @@ export function DashboardLayout({ user, onLogout }: { user: AuthUser; onLogout: 
           )
         }
       case "analytics":
-        return <AnalyticsPage user={user} />
+        return <AnalyticsPage />
       case "games":
         return <GamesPage />
       case "settings":
-        return <SettingsPage user={user} />
+        return <SettingsPage />
       default:
         return <DashboardHome user={user} lastFocusSession={lastFocusSession} />
     }

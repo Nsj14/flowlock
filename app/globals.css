@@ -127,4 +127,30 @@
   body {
     @apply bg-background text-foreground;
   }
+
+  /* Prevent Tailwind v4 or global SVG stroke/fill rules from corrupting react-chessboard pieces */
+  .chess-board-wrapper svg {
+    fill: initial;
+    stroke: initial;
+    stroke-width: initial;
+  }
+
+  .chess-board-wrapper svg path {
+    fill: inherit;
+    stroke: inherit;
+  }
+}
+
+/* Utilities */
+@layer utilities {
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    /* IE and Edge */
+    scrollbar-width: none;
+    /* Firefox */
+  }
 }
