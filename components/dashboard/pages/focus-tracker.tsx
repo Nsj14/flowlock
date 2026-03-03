@@ -2,10 +2,13 @@
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { Eye, Play, Square, RotateCcw, AlertTriangle, CheckCircle2, Download } from "lucide-react"
+import { Eye, Play, Square, RotateCcw, AlertTriangle, CheckCircle2, Download, Mic, Volume2, ChevronDown, ChevronUp } from "lucide-react"
 import { useState, useEffect, useRef, useCallback } from "react"
 import Script from "next/script"
 import type { FaceLandmarker as FaceLandmarkerType } from "@mediapipe/tasks-vision"
+import { useNoiseDetector } from "@/hooks/use-noise-detector"
+import { useFaceAuth } from "@/hooks/use-face-auth"
+import { toast } from "sonner"
 
 // Session result data passed to parent
 export interface FocusSessionResult {
@@ -14,10 +17,13 @@ export interface FocusSessionResult {
     drowsyCount: number
     headTurnedCount: number
     faceMissingCount: number
+    unauthorizedCount: number
+    highNoiseCount: number
     focusedTime: number
     drowsyTime: number
     headTurnedTime: number
     faceMissingTime: number
+    unauthorizedTime: number
 }
 
 interface FocusTrackerProps {
@@ -31,8 +37,8 @@ const CONFIG = {
     BUFFER_TIME: 1000,
 }
 
-type DetectionStatus = "FOCUSED" | "DROWSY" | "HEAD_TURNED" | "FACE_MISSING"
-type Phase = "ready" | "active" | "results"
+type DetectionStatus = "FOCUSED" | "DROWSY" | "HEAD_TURNED" | "FACE_MISSING" | "UNAUTHORIZED"
+type Phase = "ready" | "enroll" | "active" | "results"
 
 export function FocusTracker({ onSessionComplete }: FocusTrackerProps) {
     const [phase, setPhase] = useState<Phase>("ready")
@@ -44,11 +50,17 @@ export function FocusTracker({ onSessionComplete }: FocusTrackerProps) {
         doze: "0.0s",
         face: "0.0s",
         head: "0.0s",
+        unauth: "0.0s",
         ear: "0.00",
         yaw: "0°",
         duration: "00:00",
     })
     const [result, setResult] = useState<FocusSessionResult | null>(null)
+    const [noiseExpanded, setNoiseExpanded] = useState(true)
+
+    // Face Auth and Noise detection hooks
+    const { isModelsLoaded, isEnrolled, loadModels, checkEnrollmentStatus, enrollFace, authenticateFace, resetFaceData } = useFaceAuth()
+    const { noiseState, startNoise, stopNoise, setAlertCallback } = useNoiseDetector()
 
     // Refs for mutable state that persists across frames
     const videoRef = useRef<HTMLVideoElement>(null)
@@ -59,18 +71,34 @@ export function FocusTracker({ onSessionComplete }: FocusTrackerProps) {
     const isRunningRef = useRef(false)
     const startTimeRef = useRef(0)
     const lastFrameTimeRef = useRef(0)
-    const timersRef = useRef({ drowsy: 0, faceMissing: 0, headTurned: 0 })
-    const statsRef = useRef({ drowsyCount: 0, faceMissingCount: 0, headTurnedCount: 0 })
+    const timersRef = useRef({ drowsy: 0, faceMissing: 0, headTurned: 0, unauthorized: 0 })
+    const statsRef = useRef({ drowsyCount: 0, faceMissingCount: 0, headTurnedCount: 0, unauthorizedCount: 0 })
     const historyRef = useRef<Array<{ type: string; start: boolean; time: number }>>([])
     const currentStatusRef = useRef<DetectionStatus>("FOCUSED")
     const chartInstanceRef = useRef<any>(null)
     const durationIntervalRef = useRef<NodeJS.Timeout | null>(null)
+    const authIntervalRef = useRef<NodeJS.Timeout | null>(null)
+    const isUnauthorizedRef = useRef<boolean>(false)
     const processDetectionRef = useRef<(faceLandmarks: any[], ctx: CanvasRenderingContext2D) => void>(() => { })
+
+    // Register noise alert callback
+    useEffect(() => {
+        setAlertCallback(() => {
+            toast.warning("🚨 High Noise Detected!", {
+                duration: 4000,
+                position: "top-right",
+            })
+        })
+    }, [setAlertCallback])
 
     // Detect already-loaded Chart.js script (e.g. after SPA navigation)
     useEffect(() => {
         if (typeof (window as any).Chart === "function") setChartLoaded(true)
-    }, [])
+
+        // Load models and check enrollment
+        loadModels()
+        checkEnrollmentStatus()
+    }, [loadModels, checkEnrollmentStatus])
 
     // EAR calculation
     // EAR — works with normalized landmarks (ratio is scale-invariant)
@@ -110,6 +138,7 @@ export function FocusTracker({ onSessionComplete }: FocusTrackerProps) {
                 if (newStatus === "DROWSY") statsRef.current.drowsyCount++
                 if (newStatus === "HEAD_TURNED") statsRef.current.headTurnedCount++
                 if (newStatus === "FACE_MISSING") statsRef.current.faceMissingCount++
+                if (newStatus === "UNAUTHORIZED") statsRef.current.unauthorizedCount++
             }
 
             currentStatusRef.current = newStatus
@@ -122,6 +151,8 @@ export function FocusTracker({ onSessionComplete }: FocusTrackerProps) {
                 updateStatusUI("⚠ Distraction: Head Turned Away", "warning")
             } else if (newStatus === "FACE_MISSING") {
                 updateStatusUI("⚠ Distraction: Face Not In Frame", "warning")
+            } else if (newStatus === "UNAUTHORIZED") {
+                updateStatusUI("🚨 ALERT: Unauthorized User Detected", "warning")
             }
         },
         [updateStatusUI]
@@ -150,6 +181,23 @@ export function FocusTracker({ onSessionComplete }: FocusTrackerProps) {
             const now = Date.now()
             const delta = now - lastFrameTimeRef.current
             lastFrameTimeRef.current = now
+
+            if (isUnauthorizedRef.current) {
+                timersRef.current.unauthorized += delta
+                updateDetectionStatus("UNAUTHORIZED")
+                setMetrics((prev) => ({
+                    ...prev,
+                    ear: "0.00",
+                    yaw: "0°",
+                    unauth: (timersRef.current.unauthorized / 1000).toFixed(1) + "s",
+                    doze: (timersRef.current.drowsy / 1000).toFixed(1) + "s",
+                    face: (timersRef.current.faceMissing / 1000).toFixed(1) + "s",
+                    head: (timersRef.current.headTurned / 1000).toFixed(1) + "s",
+                }))
+                return
+            } else {
+                timersRef.current.unauthorized = 0
+            }
 
             // No face detected
             if (!faceLandmarks || faceLandmarks.length === 0) {
@@ -215,6 +263,7 @@ export function FocusTracker({ onSessionComplete }: FocusTrackerProps) {
                 doze: (timersRef.current.drowsy / 1000).toFixed(1) + "s",
                 face: (timersRef.current.faceMissing / 1000).toFixed(1) + "s",
                 head: (timersRef.current.headTurned / 1000).toFixed(1) + "s",
+                unauth: (timersRef.current.unauthorized / 1000).toFixed(1) + "s",
             }))
         },
         [calculateEAR, drawMesh, updateDetectionStatus]
@@ -265,16 +314,51 @@ export function FocusTracker({ onSessionComplete }: FocusTrackerProps) {
         }
     }, [])
 
+    const handleEnroll = async () => {
+        setPhase("enroll")
+        updateStatusUI("Requesting Camera...", "neutral")
+        await setupCamera()
+    }
+
+    const captureAndEnroll = async () => {
+        if (!videoRef.current) return
+
+        try {
+            updateStatusUI("Enrolling face...", "neutral")
+            if (!isModelsLoaded) {
+                updateStatusUI("Loading AI Models...", "neutral")
+                return
+            }
+
+            const res = await enrollFace(videoRef.current)
+            if (res.success) {
+                setPhase("ready")
+                updateStatusUI("System Ready", "neutral")
+
+                if (videoRef.current?.srcObject) {
+                    const tracks = (videoRef.current.srcObject as MediaStream).getTracks()
+                    tracks.forEach(track => track.stop())
+                    videoRef.current.srcObject = null
+                }
+            } else {
+                updateStatusUI("Error: " + res.message, "warning")
+            }
+        } catch (e: any) {
+            updateStatusUI("Auth Error: " + e.message, "warning")
+        }
+    }
+
     // Start session
     const handleStart = useCallback(async () => {
         try {
             setPhase("active")
 
             // Reset state
-            timersRef.current = { drowsy: 0, faceMissing: 0, headTurned: 0 }
-            statsRef.current = { drowsyCount: 0, faceMissingCount: 0, headTurnedCount: 0 }
+            timersRef.current = { drowsy: 0, faceMissing: 0, headTurned: 0, unauthorized: 0 }
+            statsRef.current = { drowsyCount: 0, faceMissingCount: 0, headTurnedCount: 0, unauthorizedCount: 0 }
             historyRef.current = []
             currentStatusRef.current = "FOCUSED"
+            isUnauthorizedRef.current = false
             lastFrameTimeRef.current = Date.now()
 
             if (videoRef.current) {
@@ -310,6 +394,9 @@ export function FocusTracker({ onSessionComplete }: FocusTrackerProps) {
             startTimeRef.current = Date.now()
             updateStatusUI("✓ Focused", "focused")
 
+            // Start noise detection
+            startNoise()
+
             // Duration ticker
             durationIntervalRef.current = setInterval(() => {
                 const elapsed = Date.now() - startTimeRef.current
@@ -323,6 +410,22 @@ export function FocusTracker({ onSessionComplete }: FocusTrackerProps) {
                 }))
             }, 1000)
 
+            // Background auth interval
+            authIntervalRef.current = setInterval(async () => {
+                if (!videoRef.current || !isRunningRef.current) return
+                try {
+                    const data = await authenticateFace(videoRef.current)
+                    // Don't flag unauthorized if Model is still loading or it's simply face missing (which tracker handles)
+                    if (!data.authenticated && data.message !== "No face detected" && data.message !== "Models not loaded") {
+                        isUnauthorizedRef.current = true
+                    } else if (data.authenticated) {
+                        isUnauthorizedRef.current = false
+                    }
+                } catch (e) {
+                    console.error("Auth backend error:", e)
+                }
+            }, 5000)
+
             detectLoop()
         } catch (error: any) {
             console.error(error)
@@ -335,6 +438,10 @@ export function FocusTracker({ onSessionComplete }: FocusTrackerProps) {
         isRunningRef.current = false
         if (animationIdRef.current) cancelAnimationFrame(animationIdRef.current)
         if (durationIntervalRef.current) clearInterval(durationIntervalRef.current)
+        if (authIntervalRef.current) clearInterval(authIntervalRef.current)
+
+        // Stop noise detection
+        stopNoise()
 
         // Stop camera
         if (videoRef.current?.srcObject) {
@@ -350,6 +457,7 @@ export function FocusTracker({ onSessionComplete }: FocusTrackerProps) {
         let drowsyDuration = 0
         let headDuration = 0
         let faceDuration = 0
+        let unauthorizedDuration = 0
         let lastEvent: any = null
 
         historyRef.current.forEach((e) => {
@@ -360,6 +468,7 @@ export function FocusTracker({ onSessionComplete }: FocusTrackerProps) {
                 if (e.type === "DROWSY") drowsyDuration += dur
                 if (e.type === "HEAD_TURNED") headDuration += dur
                 if (e.type === "FACE_MISSING") faceDuration += dur
+                if (e.type === "UNAUTHORIZED") unauthorizedDuration += dur
                 lastEvent = null
             }
         })
@@ -369,9 +478,10 @@ export function FocusTracker({ onSessionComplete }: FocusTrackerProps) {
             if (lastEvent.type === "DROWSY") drowsyDuration += dur
             if (lastEvent.type === "HEAD_TURNED") headDuration += dur
             if (lastEvent.type === "FACE_MISSING") faceDuration += dur
+            if (lastEvent.type === "UNAUTHORIZED") unauthorizedDuration += dur
         }
 
-        const distractedTime = drowsyDuration + headDuration + faceDuration
+        const distractedTime = drowsyDuration + headDuration + faceDuration + unauthorizedDuration
         const focusedTime = Math.max(0, totalDuration - distractedTime)
         const score = Math.round((focusedTime / totalDuration) * 100) || 0
 
@@ -381,10 +491,13 @@ export function FocusTracker({ onSessionComplete }: FocusTrackerProps) {
             drowsyCount: statsRef.current.drowsyCount,
             headTurnedCount: statsRef.current.headTurnedCount,
             faceMissingCount: statsRef.current.faceMissingCount,
+            unauthorizedCount: statsRef.current.unauthorizedCount,
+            highNoiseCount: noiseState.highNoiseCount,
             focusedTime,
             drowsyTime: drowsyDuration,
             headTurnedTime: headDuration,
             faceMissingTime: faceDuration,
+            unauthorizedTime: unauthorizedDuration,
         }
 
         setResult(sessionResult)
@@ -407,11 +520,11 @@ export function FocusTracker({ onSessionComplete }: FocusTrackerProps) {
             chartInstanceRef.current = new Chart(ctx, {
                 type: "doughnut",
                 data: {
-                    labels: ["Focused", "Drowsy", "Head Turned", "Missing"],
+                    labels: ["Focused", "Drowsy", "Head Turned", "Missing", "Unauthorized"],
                     datasets: [
                         {
-                            data: [result.focusedTime, result.drowsyTime, result.headTurnedTime, result.faceMissingTime],
-                            backgroundColor: ["#10b981", "#f59e0b", "#ef4444", "#6b7280"],
+                            data: [result.focusedTime, result.drowsyTime, result.headTurnedTime, result.faceMissingTime, result.unauthorizedTime],
+                            backgroundColor: ["#10b981", "#f59e0b", "#ef4444", "#6b7280", "#a855f7"],
                         },
                     ],
                 },
@@ -446,10 +559,13 @@ export function FocusTracker({ onSessionComplete }: FocusTrackerProps) {
                 drowsyCount: result.drowsyCount,
                 headTurnedCount: result.headTurnedCount,
                 faceMissingCount: result.faceMissingCount,
+                unauthorizedCount: result.unauthorizedCount,
+                highNoiseCount: result.highNoiseCount,
                 focusedTime: formatTime(result.focusedTime),
                 drowsyTime: formatTime(result.drowsyTime),
                 headTurnedTime: formatTime(result.headTurnedTime),
                 faceMissingTime: formatTime(result.faceMissingTime),
+                unauthorizedTime: formatTime(result.unauthorizedTime),
                 history: historyRef.current,
             },
             null,
@@ -515,19 +631,82 @@ export function FocusTracker({ onSessionComplete }: FocusTrackerProps) {
                                 </div>
 
                                 <div className="text-center space-y-2">
-                                    <Button
-                                        size="lg"
-                                        onClick={handleStart}
-                                        className="gap-2 text-base px-8"
-                                    >
-                                        <Play size={20} />
-                                        Start Focus Session
-                                    </Button>
+                                    {isEnrolled === false ? (
+                                        <Button
+                                            size="lg"
+                                            onClick={handleEnroll}
+                                            className="gap-2 text-base px-8 bg-purple-600 hover:bg-purple-700 text-white"
+                                        >
+                                            <Eye size={20} />
+                                            Enroll Your Face First
+                                        </Button>
+                                    ) : (
+                                        <div className="flex flex-col sm:flex-row gap-3 items-center justify-center">
+                                            <Button
+                                                size="lg"
+                                                onClick={handleStart}
+                                                className="gap-2 text-base px-8"
+                                            >
+                                                <Play size={20} />
+                                                Start Focus Session
+                                            </Button>
+                                            <Button
+                                                size="lg"
+                                                variant="outline"
+                                                onClick={async () => {
+                                                    try {
+                                                        await resetFaceData()
+                                                        toast.success("Face data removed. Please enroll again.")
+                                                    } catch {
+                                                        toast.error("Could not reset face data.")
+                                                    }
+                                                }}
+                                                className="gap-2 text-base px-6 bg-transparent"
+                                            >
+                                                <RotateCcw size={18} />
+                                                Re-enroll Face
+                                            </Button>
+                                        </div>
+                                    )}
                                 </div>
 
                                 <p className="text-xs text-muted-foreground text-center">
                                     🔒 All processing happens locally. No data is stored or transmitted.
                                 </p>
+                            </CardContent>
+                        </Card>
+                    </div>
+                )}
+
+                {/* ── ENROLL PHASE ── */}
+                {phase === "enroll" && (
+                    <div className="animate-in fade-in duration-300">
+                        <Card className="border-border max-w-2xl mx-auto">
+                            <CardHeader className="text-center">
+                                <CardTitle className="text-2xl">Face Enrollment</CardTitle>
+                                <p className="text-muted-foreground text-sm">Please look directly at the camera to register your face for authentication.</p>
+                            </CardHeader>
+                            <CardContent className="space-y-6">
+                                <div className="relative bg-black aspect-video rounded-xl overflow-hidden mx-auto max-w-sm">
+                                    <video ref={videoRef} playsInline muted autoPlay className="w-full h-full object-cover" style={{ transform: "scaleX(-1)" }} />
+                                    <canvas ref={canvasRef} className="hidden" />
+                                </div>
+                                <div className="text-center">
+                                    <span className={`text-sm font-medium mb-4 block ${statusType === "warning" ? "text-red-500" : "text-amber-500"}`}>{statusText}</span>
+                                    <div className="flex gap-3 justify-center">
+                                        <Button onClick={captureAndEnroll} className="gap-2 bg-purple-600 hover:bg-purple-700 text-white">
+                                            <Eye size={18} /> Capture Face
+                                        </Button>
+                                        <Button variant="outline" onClick={() => {
+                                            if (videoRef.current?.srcObject) {
+                                                const tracks = (videoRef.current.srcObject as MediaStream).getTracks()
+                                                tracks.forEach(track => track.stop())
+                                            }
+                                            setPhase("ready")
+                                            updateStatusUI("System Ready", "neutral")
+                                        }}>Cancel</Button>
+                                    </div>
+                                </div>
                             </CardContent>
                         </Card>
                     </div>
@@ -585,6 +764,7 @@ export function FocusTracker({ onSessionComplete }: FocusTrackerProps) {
                                             { label: "Doze Timer", value: metrics.doze, id: "doze" },
                                             { label: "Face Timer", value: metrics.face, id: "face" },
                                             { label: "Head Timer", value: metrics.head, id: "head" },
+                                            { label: "Unauthorized", value: metrics.unauth, id: "unauth" },
                                             { label: "EAR", value: metrics.ear, id: "ear" },
                                             { label: "Yaw", value: metrics.yaw, id: "yaw" },
                                             { label: "Duration", value: metrics.duration, id: "duration" },
@@ -620,6 +800,83 @@ export function FocusTracker({ onSessionComplete }: FocusTrackerProps) {
                                             Stop Session
                                         </Button>
                                     </CardContent>
+                                </Card>
+
+                                {/* ── Noise Monitor Panel ── */}
+                                <Card className="border-border">
+                                    <CardHeader
+                                        className="cursor-pointer select-none pb-2"
+                                        onClick={() => setNoiseExpanded(!noiseExpanded)}
+                                    >
+                                        <CardTitle className="text-base flex items-center justify-between">
+                                            <span className="flex items-center gap-2">
+                                                <Volume2 size={18} className="text-primary" />
+                                                Noise Monitor
+                                                {noiseState.micActive && (
+                                                    <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                                                )}
+                                            </span>
+                                            {noiseExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                                        </CardTitle>
+                                    </CardHeader>
+                                    {noiseExpanded && (
+                                        <CardContent className="space-y-3 pt-0">
+                                            {noiseState.isLoading ? (
+                                                <p className="text-sm text-muted-foreground animate-pulse">Loading noise detector...</p>
+                                            ) : noiseState.micDenied ? (
+                                                <p className="text-sm text-amber-500">🎙️ Noise monitoring unavailable — microphone access denied</p>
+                                            ) : (
+                                                <>
+                                                    {/* dB Level Bar */}
+                                                    <div className="space-y-1">
+                                                        <div className="flex justify-between text-xs text-muted-foreground">
+                                                            <span>dB Level</span>
+                                                            <span>{noiseState.dbLevel > -100 ? noiseState.dbLevel.toFixed(1) : "—"} dBFS</span>
+                                                        </div>
+                                                        <div className="h-2 w-full bg-muted rounded-full overflow-hidden">
+                                                            <div
+                                                                className={`h-full rounded-full transition-all duration-300 ${noiseState.noiseStatus === "high"
+                                                                    ? "bg-red-500"
+                                                                    : noiseState.noiseStatus === "moderate"
+                                                                        ? "bg-amber-500"
+                                                                        : "bg-emerald-500"
+                                                                    }`}
+                                                                style={{
+                                                                    width: `${Math.max(0, Math.min(100, ((noiseState.dbLevel + 100) / 100) * 100))}%`,
+                                                                }}
+                                                            />
+                                                        </div>
+                                                    </div>
+
+
+                                                    {/* Noise Status Badge */}
+                                                    <div className="flex justify-between items-center px-3 py-2 bg-muted/50 rounded-lg text-sm">
+                                                        <span className="text-muted-foreground">Status</span>
+                                                        <span
+                                                            className={`font-semibold ${noiseState.noiseStatus === "high"
+                                                                ? "text-red-500"
+                                                                : noiseState.noiseStatus === "moderate"
+                                                                    ? "text-amber-500"
+                                                                    : "text-emerald-500"
+                                                                }`}
+                                                        >
+                                                            {noiseState.noiseStatus === "high"
+                                                                ? "🚨 High Noise"
+                                                                : noiseState.noiseStatus === "moderate"
+                                                                    ? "⚠️ Moderate"
+                                                                    : "✅ Quiet"}
+                                                        </span>
+                                                    </div>
+
+                                                    {/* High noise counter */}
+                                                    <div className="flex justify-between items-center px-3 py-2 bg-muted/50 rounded-lg text-sm">
+                                                        <span className="text-muted-foreground">High Noise Events</span>
+                                                        <span className="font-medium">{noiseState.highNoiseCount}</span>
+                                                    </div>
+                                                </>
+                                            )}
+                                        </CardContent>
+                                    )}
                                 </Card>
                             </div>
                         </div>
@@ -683,6 +940,18 @@ export function FocusTracker({ onSessionComplete }: FocusTrackerProps) {
                                             value: `${result.faceMissingCount} times (${formatTime(result.faceMissingTime)})`,
                                             pct: "",
                                             color: "bg-gray-500",
+                                        },
+                                        {
+                                            label: "Unauthorized User",
+                                            value: `${result.unauthorizedCount} times (${formatTime(result.unauthorizedTime)})`,
+                                            pct: "",
+                                            color: "bg-purple-500",
+                                        },
+                                        {
+                                            label: "🔊 High Noise Events",
+                                            value: `${result.highNoiseCount} interruptions`,
+                                            pct: "",
+                                            color: "bg-orange-500",
                                         },
                                     ].map((item) => (
                                         <div key={item.label} className="flex items-center gap-3 text-sm">

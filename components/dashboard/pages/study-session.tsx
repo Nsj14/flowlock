@@ -138,8 +138,8 @@ export function StudySession({ user, onSessionComplete }: StudySessionProps) {
   const isRunningRef = useRef(false)
   const startTimeRef = useRef(0)
   const lastFrameTimeRef = useRef(0)
-  const timersRef = useRef({ drowsy: 0, faceMissing: 0, headTurned: 0 })
-  const statsRef = useRef({ drowsyCount: 0, faceMissingCount: 0, headTurnedCount: 0 })
+  const timersRef = useRef({ drowsy: 0, faceMissing: 0, headTurned: 0, unauthorized: 0 })
+  const statsRef = useRef({ drowsyCount: 0, faceMissingCount: 0, headTurnedCount: 0, unauthorizedCount: 0 })
   const historyRef = useRef<Array<{ type: string; start: boolean; time: number }>>([])
   const currentStatusRef = useRef<DetectionStatus>("FOCUSED")
   const chartInstanceRef = useRef<any>(null)
@@ -391,10 +391,13 @@ export function StudySession({ user, onSessionComplete }: StudySessionProps) {
       drowsyCount: statsRef.current.drowsyCount,
       headTurnedCount: statsRef.current.headTurnedCount,
       faceMissingCount: statsRef.current.faceMissingCount,
+      unauthorizedCount: statsRef.current.unauthorizedCount,
+      highNoiseCount: 0,
       focusedTime,
       drowsyTime: drowsyDuration,
       headTurnedTime: headDuration,
       faceMissingTime: faceDuration,
+      unauthorizedTime: 0,
     }
   }, [])
 
@@ -411,8 +414,8 @@ export function StudySession({ user, onSessionComplete }: StudySessionProps) {
       setInitialTime(totalSeconds)
 
       // Reset detection state
-      timersRef.current = { drowsy: 0, faceMissing: 0, headTurned: 0 }
-      statsRef.current = { drowsyCount: 0, faceMissingCount: 0, headTurnedCount: 0 }
+      timersRef.current = { drowsy: 0, faceMissing: 0, headTurned: 0, unauthorized: 0 }
+      statsRef.current = { drowsyCount: 0, faceMissingCount: 0, headTurnedCount: 0, unauthorizedCount: 0 }
       historyRef.current = []
       currentStatusRef.current = "FOCUSED"
       lastFrameTimeRef.current = Date.now()
