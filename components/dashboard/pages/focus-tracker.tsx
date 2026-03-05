@@ -10,6 +10,7 @@ import { useNoiseDetector } from "@/hooks/use-noise-detector"
 import { useAuth } from "@/components/providers/auth-provider"
 import { supabase } from "@/utils/supabase/client"
 import { toast } from "sonner"
+import { useFaceAuth } from "@/hooks/use-face-auth"
 
 // Session result data passed to parent
 export interface FocusSessionResult {
@@ -57,12 +58,21 @@ export function FocusTracker({ onSessionComplete }: FocusTrackerProps) {
         duration: "00:00",
     })
     const [result, setResult] = useState<FocusSessionResult | null>(null)
-    const [isEnrolled, setIsEnrolled] = useState<boolean | null>(null)
+
     const [noiseExpanded, setNoiseExpanded] = useState(true)
 
     // Noise detection hook
     const { noiseState, startNoise, stopNoise, setAlertCallback } = useNoiseDetector()
     const { user } = useAuth()
+    const {
+        loadModels,
+        isModelsLoaded,
+        isEnrolled,
+        checkEnrollmentStatus,
+        enrollFace,
+        authenticateFace,
+        resetFaceData,
+    } = useFaceAuth()
 
     // Refs for mutable state that persists across frames
     const videoRef = useRef<HTMLVideoElement>(null)
@@ -97,14 +107,9 @@ export function FocusTracker({ onSessionComplete }: FocusTrackerProps) {
     useEffect(() => {
         if (typeof (window as any).Chart === "function") setChartLoaded(true)
 
-        // Check if user is enrolled
-        fetch(`http://localhost:8000/status?user_id=${user?.id || ""}`)
-            .then(res => res.json())
-            .then(data => setIsEnrolled(data.enrolled))
-            .catch(err => {
-                console.warn("Auth backend not reachable:", err)
-                setIsEnrolled(false)
-            })
+        // Load face-api models and check enrollment status (in-browser)
+        loadModels()
+        checkEnrollmentStatus()
     }, [])
 
     // EAR calculation
@@ -321,30 +326,22 @@ export function FocusTracker({ onSessionComplete }: FocusTrackerProps) {
 
     const handleEnroll = async () => {
         setPhase("enroll")
-        updateStatusUI("Requesting Camera...", "neutral")
+        updateStatusUI("Loading models & camera...", "neutral")
+        await loadModels()
         await setupCamera()
+        updateStatusUI("Ready — click Capture Face", "neutral")
     }
 
     const captureAndEnroll = async () => {
-        if (!videoRef.current || !canvasRef.current) return
-        const ctx = canvasRef.current.getContext("2d")
-        if (!ctx) return
-
-        ctx.drawImage(videoRef.current, 0, 0, canvasRef.current.width, canvasRef.current.height)
-        const base64Image = canvasRef.current.toDataURL("image/jpeg")
+        if (!videoRef.current) return
 
         try {
             updateStatusUI("Enrolling face...", "neutral")
-            const res = await fetch("http://localhost:8000/register", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ image: base64Image, user_id: user?.id || "" })
-            })
-            const data = await res.json()
-            if (data.success) {
-                setIsEnrolled(true)
+            const result = await enrollFace(videoRef.current)
+            if (result.success) {
                 setPhase("ready")
                 updateStatusUI("System Ready", "neutral")
+                toast.success("Face registered successfully!")
 
                 if (videoRef.current?.srcObject) {
                     const tracks = (videoRef.current.srcObject as MediaStream).getTracks()
@@ -352,10 +349,10 @@ export function FocusTracker({ onSessionComplete }: FocusTrackerProps) {
                     videoRef.current.srcObject = null
                 }
             } else {
-                updateStatusUI("Error: " + data.message, "warning")
+                updateStatusUI("Error: " + result.message, "warning")
             }
         } catch (e: any) {
-            updateStatusUI("Backend Error: " + e.message, "warning")
+            updateStatusUI("Error: " + e.message, "warning")
         }
     }
 
@@ -401,6 +398,9 @@ export function FocusTracker({ onSessionComplete }: FocusTrackerProps) {
                 })
             }
 
+            // Load face-api models for background authentication
+            await loadModels()
+
             isRunningRef.current = true
             startTimeRef.current = Date.now()
             updateStatusUI("✓ Focused", "focused")
@@ -421,31 +421,18 @@ export function FocusTracker({ onSessionComplete }: FocusTrackerProps) {
                 }))
             }, 1000)
 
-            // Background auth interval
+            // Background auth interval (in-browser using face-api)
             authIntervalRef.current = setInterval(async () => {
                 if (!videoRef.current || !isRunningRef.current) return
                 try {
-                    const offscreenCanvas = document.createElement("canvas")
-                    offscreenCanvas.width = 640
-                    offscreenCanvas.height = 480
-                    const ctx = offscreenCanvas.getContext("2d")
-                    if (!ctx) return
-                    ctx.drawImage(videoRef.current, 0, 0, 640, 480)
-                    const base64Image = offscreenCanvas.toDataURL("image/jpeg")
-                    const res = await fetch("http://localhost:8000/authenticate", {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ image: base64Image, user_id: user?.id || "" })
-                    })
-                    const data = await res.json()
-                    // Don't flag unauthorized if Model is still loading or it's simply face missing (which tracker handles)
-                    if (res.ok && !data.authenticated && data.message !== "No face detected") {
+                    const result = await authenticateFace(videoRef.current)
+                    if (!result.authenticated && result.message !== "No face detected" && result.message !== "No enrolled face found" && result.message !== "Models not loaded") {
                         isUnauthorizedRef.current = true
-                    } else if (res.ok && data.authenticated) {
+                    } else if (result.authenticated) {
                         isUnauthorizedRef.current = false
                     }
                 } catch (e) {
-                    console.error("Auth backend error:", e)
+                    console.error("Auth error:", e)
                 }
             }, 5000)
 
@@ -702,11 +689,10 @@ export function FocusTracker({ onSessionComplete }: FocusTrackerProps) {
                                                 variant="outline"
                                                 onClick={async () => {
                                                     try {
-                                                        await fetch(`http://localhost:8000/reset?user_id=${user?.id || ""}`, { method: "DELETE" })
-                                                        setIsEnrolled(false)
+                                                        await resetFaceData()
                                                         toast.success("Face data removed. Please enroll again.")
                                                     } catch {
-                                                        toast.error("Could not reset face data. Is the backend running?")
+                                                        toast.error("Could not reset face data.")
                                                     }
                                                 }}
                                                 className="gap-2 text-base px-6 bg-transparent"
