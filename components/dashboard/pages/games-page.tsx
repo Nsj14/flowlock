@@ -47,7 +47,7 @@ export function GamesPage() {
   }
 
   return (
-    <>
+    <div className="relative min-h-screen">
       <div className="p-8 space-y-6">
         <div>
           <h1 className="text-3xl font-bold mb-2">Break-Time Games</h1>
@@ -174,6 +174,6 @@ export function GamesPage() {
           }}
         />
       )}
-    </>
+    </div>
   )
 }

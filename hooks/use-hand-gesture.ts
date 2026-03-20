@@ -14,11 +14,19 @@ export interface GestureState {
 
 export function useHandGesture(enabled: boolean) {
     const videoRef = useRef<HTMLVideoElement | null>(null)
-    const [state, setState] = useState<GestureState>({ x: window.innerWidth / 2, y: window.innerHeight / 2, gesture: "NONE", isActive: false })
-    const requestRef = useRef<number>()
+    const [state, setState] = useState<GestureState>({ 
+        x: typeof window !== "undefined" ? window.innerWidth / 2 : 0, 
+        y: typeof window !== "undefined" ? window.innerHeight / 2 : 0, 
+        gesture: "NONE", 
+        isActive: false 
+    })
+    const requestRef = useRef<number>(0)
     const landmarkerRef = useRef<HandLandmarker | null>(null)
     const lastClickTimeRef = useRef<number>(0)
-    const posRef = useRef({ x: window.innerWidth / 2, y: window.innerHeight / 2 })
+    const posRef = useRef({ 
+        x: typeof window !== "undefined" ? window.innerWidth / 2 : 0, 
+        y: typeof window !== "undefined" ? window.innerHeight / 2 : 0 
+    })
 
     // Helper to setup MediaPipe
     useEffect(() => {
